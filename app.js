@@ -335,7 +335,7 @@
           datasets: [{ data: u14.map((r) => r.tot), backgroundColor: "#f5b301", borderRadius: 4, maxBarThickness: 28 }],
         },
         options: {
-          responsive: true, maintainAspectRatio: false,
+          animation: false, responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => (x.raw == null ? "Sin cierre" : $r(x.raw)) } } },
           scales: { x: { ticks: tick, grid: { display: false } }, y: { ticks: { ...tick, callback: money }, grid } },
         },
@@ -350,7 +350,7 @@
           ],
         },
         options: {
-          responsive: true, maintainAspectRatio: false,
+          animation: false, responsive: true, maintainAspectRatio: false,
           plugins: {
             legend: { labels: { color: "#e8ebf2", boxWidth: 12 } },
             tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${$r(x.raw)}` } },
