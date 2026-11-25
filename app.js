@@ -1,24 +1,38 @@
-/* Mala Fama Control · fase 1 (prueba). Supabase Auth + datos con RLS. */
+/* Mala Fama Control · fase 1 + cierres (prueba). Supabase Auth + datos con RLS. */
 (function () {
   const CATS = ["Cocina", "Barra", "Cocina y Barra", "Otros"];
   const STOCK_CATS = { admin: ["Cocina", "Barra", "Cocina y Barra"], encargado: ["Cocina", "Barra", "Cocina y Barra"],
     stock: ["Cocina", "Barra", "Cocina y Barra"], cocina: ["Cocina", "Cocina y Barra"], barra: ["Barra", "Cocina y Barra"] };
   const ROL_LABEL = { admin: "Administración", encargado: "Encargado", cocina: "Cocina", barra: "Barra", stock: "Tablet de stock", ingesta: "Carga automática" };
+  const DOW = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+  const MES = ["", "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "set", "oct", "nov", "dic"];
+  const MES_L = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
   const sb = window.supabase.createClient(MF_CONFIG.url, MF_CONFIG.key, { auth: { persistSession: true } });
   const $ = (s, el = document) => el.querySelector(s);
   const app = $("#app");
-  const S = { perfil: null, items: null, nov: null, catOn: "Todas", prov: "", q: "",
-    stockCat: null, stockQ: "", shown: 60, qty: {}, fecha: hoy(), quien: "" };
+  const S = { perfil: null, items: null, nov: null, cierres: null, cDia: null, cPer: "14d", cCharts: {},
+    catOn: "Todas", prov: "", q: "", stockCat: null, stockQ: "", shown: 60, qty: {}, fecha: hoy(), quien: "" };
 
   function hoy() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
   const pill = (c) => ({ Cocina: "ok", Barra: "bar", "Cocina y Barra": "mid", Otros: "bad" }[c] || "");
   const nf = (n) => (n || 0).toLocaleString("es-UY", { maximumFractionDigits: 0 });
   const $u = (n, mon) => (mon === "USD" ? "US$ " : "$ ") + (n == null ? "—" : Number(n).toLocaleString("es-UY", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  const $r = (n) => (n == null ? "—" : "$" + Math.round(n).toLocaleString("es-UY"));
+  const $k = (n) => {
+    if (n == null) return "—";
+    const a = Math.abs(n);
+    if (a >= 1e6) return "$" + (n / 1e6).toLocaleString("es-UY", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M";
+    if (a >= 1e4) return "$" + Math.round(n / 1e3).toLocaleString("es-UY") + " mil";
+    return $r(n);
+  };
   const dmy = (s) => (!s ? "—" : s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4));
+  const dow = (iso) => { const [y, m, d] = iso.split("-").map(Number); return DOW[new Date(y, m - 1, d).getDay()]; };
+  const addDays = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); const x = new Date(Date.UTC(y, m - 1, d + n)); return x.toISOString().slice(0, 10); };
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const rol = () => S.perfil && S.perfil.rol;
   const can = (sec) => {
     const r = rol(); if (!r) return false;
+    if (sec === "cierres") return r === "admin";
     if (sec === "stock") return !!STOCK_CATS[r];
     return r === "admin" || r === "encargado";
   };
@@ -45,6 +59,50 @@
     S.items = rows; return rows;
   }
 
+  async function loadCierres() {
+    if (S.cierres) return S.cierres;
+    const rows = await fetchAll("cierres", "caja,jornada,estado,comensales,comprobantes,total_ventas,efectivo_en_caja,pagos,secciones,mozos,movimientos", (q) => q.order("jornada").order("caja"));
+    const byDay = {};
+    const jc = {};
+    let histTotal = 0, cMin = Infinity, cMax = -Infinity;
+    const cajaSet = new Set();
+    for (const r of rows) {
+      const c = Number(r.caja);
+      cajaSet.add(c);
+      if (c < cMin) cMin = c;
+      if (c > cMax) cMax = c;
+      (jc[c] = jc[c] || []).push(r.jornada);
+      const tot = Number(r.total_ventas || 0);
+      histTotal += tot;
+      const d = byDay[r.jornada] || (byDay[r.jornada] = {
+        d: r.jornada, tot: 0, cm: 0, cp: 0, cajas: [], pagos: {}, secs: {}, mozos: {}, mv: []
+      });
+      d.tot += tot;
+      d.cm += Number(r.comensales || 0);
+      d.cp += Number(r.comprobantes || 0);
+      d.cajas.push(c);
+      for (const [k, p] of Object.entries(r.pagos || {})) d.pagos[k] = (d.pagos[k] || 0) + Number(p.total || 0);
+      for (const [k, p] of Object.entries(r.secciones || {})) d.secs[k] = (d.secs[k] || 0) + Number(p.ventas || 0);
+      for (const [k, p] of Object.entries(r.mozos || {})) {
+        const m = d.mozos[k] || (d.mozos[k] = { ops: 0, ventas: 0 });
+        m.ops += Number(p.ops || 0);
+        m.ventas += Number(p.ventas || 0);
+      }
+      for (const x of (r.movimientos || [])) d.mv.push({ caja: c, tipo: x.tipo, detalle: x.detalle, monto: Number(x.monto || 0) });
+    }
+    const days = Object.values(byDay).sort((a, b) => a.d.localeCompare(b.d));
+    const gaps = [];
+    for (let c = cMin; c <= cMax; c++) if (!cajaSet.has(c)) gaps.push(c);
+    const gapRanges = [];
+    for (const c of gaps) {
+      if (gapRanges.length && c === gapRanges[gapRanges.length - 1][1] + 1) gapRanges[gapRanges.length - 1][1] = c;
+      else gapRanges.push([c, c]);
+    }
+    const gapsTxt = gapRanges.map(([a, b]) => (a === b ? String(a) : `${a}–${b}`)).join(", ");
+    S.cierres = { rows, days, byDay, nCierres: rows.length, histTotal, cMin, cMax, gapsTxt };
+    return S.cierres;
+  }
+
   async function route() {
     const h = (location.hash || "#/inicio").replace(/^#/, "");
     const { data: { session } } = await sb.auth.getSession();
@@ -55,17 +113,19 @@
       S.perfil = data;
     }
     try {
+      if (h === "/cierres" && can("cierres")) return await renderCierres();
       if (h === "/catalogo" && can("catalogo")) return await renderCatalogo();
       if (h === "/stock" && can("stock")) return await renderStock();
       if (h === "/novedades" && can("novedades")) return await renderNovedades();
       if (!can("catalogo") && can("stock") && h !== "/inicio") { location.hash = "#/stock"; return; }
-      return renderHome();
+      return await renderHome();
     } catch (e) { console.error(e); app.innerHTML = `<div class="wrap"><div class="alert warn">No se pudieron cargar los datos: ${esc(e.message || e)}</div></div>`; }
   }
 
-  function shell(title, sub, body, extra) {
-    const links = [["#/inicio", "Inicio", true], ["#/catalogo", "Catálogo", can("catalogo")],
-      ["#/stock", "Ingreso de stock", can("stock")], ["#/novedades", "Novedades", can("novedades")]].filter((x) => x[2]);
+  function shell(title, sub, body, extra, wide) {
+    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")],
+      ["#/catalogo", "Catálogo", can("catalogo")], ["#/stock", "Ingreso de stock", can("stock")],
+      ["#/novedades", "Novedades", can("novedades")]].filter((x) => x[2]);
     const here = location.hash || "#/inicio";
     return `<header class="top"><div class="toprow"><div>
       <h1>Mala Fama PDE · <span>${esc(title)}</span> <span class="badge">prueba</span></h1>
@@ -75,7 +135,7 @@
       ${extra || ""}</header>${body}`;
   }
   function bindSalir() {
-    const a = $("#salir"); if (a) a.onclick = async (e) => { e.preventDefault(); await sb.auth.signOut(); S.perfil = null; S.items = null; S.nov = null; location.hash = "#/inicio"; route(); };
+    const a = $("#salir"); if (a) a.onclick = async (e) => { e.preventDefault(); await sb.auth.signOut(); S.perfil = null; S.items = null; S.nov = null; S.cierres = null; S.cDia = null; location.hash = "#/inicio"; route(); };
   }
 
   function renderLogin(msg) {
@@ -101,17 +161,204 @@
 
   async function renderHome() {
     const cards = [];
+    if (can("cierres")) {
+      let ultTxt = "Entrar para ver el detalle";
+      let ultVal = "";
+      try {
+        const { data } = await sb.from("cierres").select("jornada,total_ventas").order("jornada", { ascending: false }).limit(5);
+        if (data && data.length) {
+          const d0 = data[0].jornada;
+          const sum = data.filter((x) => x.jornada === d0).reduce((a, x) => a + Number(x.total_ventas || 0), 0);
+          ultVal = $r(sum);
+          ultTxt = `Último cierre, ${dow(d0)} ${dmy(d0)}`;
+        }
+      } catch (_) {}
+      cards.push(`<a class="opt" href="#/cierres"><div class="ic">💵</div><div class="t">Cierres de caja</div>
+        <div class="d">Lo que entra cada noche, medios de pago, secciones y comparación con el año pasado.</div>
+        ${ultVal ? `<div class="kpi-mini">${ultVal}<span>${ultTxt}</span></div>` : ""}
+        <div class="go">Entrar →</div></a>`);
+      cards.push(`<a class="opt soon" href="#"><div class="ic">🍕</div><div class="t">Ventas <span class="tag">paso 2</span></div>
+        <div class="d">Lo que se vende por familia y producto con los CSV de Vectio.</div><div class="go">Próximamente</div></a>`);
+      cards.push(`<a class="opt soon" href="#"><div class="ic">⚖️</div><div class="t">Consumos vs compras <span class="tag">paso 3</span></div>
+        <div class="d">El cruce entre FacturaExpress y las ventas arranca después de Ventas.</div><div class="go">Próximamente</div></a>`);
+    }
     if (can("catalogo")) cards.push(`<a class="opt" href="#/catalogo"><div class="ic">🏷️</div><div class="t">Catálogo</div>
       <div class="d">Artículos de FacturaExpress en Cocina, Barra, Cocina y Barra u Otros. Acá se acomodan los "a revisar".</div><div class="go">Entrar →</div></a>`);
     if (can("stock")) cards.push(`<a class="opt" href="#/stock"><div class="ic">📦</div><div class="t">Ingreso de stock</div>
       <div class="d">Recuento de mercadería por categoría, pensado para la tablet.</div><div class="go">Entrar →</div></a>`);
     if (can("novedades")) cards.push(`<a class="opt" href="#/novedades"><div class="ic">🆕</div><div class="t">Novedades de la semana</div>
       <div class="d">Proveedores y artículos que aparecen por primera vez en la última carga.</div><div class="go">Entrar →</div></a>`);
-    cards.push(`<a class="opt soon" href="#"><div class="ic">⚖️</div><div class="t">Consumos vs compras <span class="tag">fase 2</span></div>
-      <div class="d">El cruce con ventas y recetas viene después.</div><div class="go">Más adelante</div></a>`);
-    app.innerHTML = shell("Tablero", "Versión de prueba de la herramienta nueva. El dashboard actual sigue igual.",
-      `<div class="wrap"><div class="opts">${cards.join("")}</div></div>`);
+    if (!can("cierres") && can("catalogo")) {
+      cards.push(`<a class="opt soon" href="#"><div class="ic">⚖️</div><div class="t">Consumos vs compras <span class="tag">próximamente</span></div>
+        <div class="d">El cruce con ventas y recetas viene después.</div><div class="go">Más adelante</div></a>`);
+    }
+    const wide = can("cierres");
+    app.innerHTML = shell("Inicio", "Versión de prueba de la herramienta nueva. El dashboard actual sigue igual.",
+      `<div class="wrap${wide ? " wide" : ""}"><div class="opts${wide ? " tres" : ""}">${cards.join("")}</div></div>`);
     bindSalir();
+  }
+
+  function varHtml(a, b) {
+    if (!b) return "";
+    const p = ((a - b) / b) * 100;
+    return `<span class="${p >= 0 ? "up" : "down"}">${p >= 0 ? "+" : ""}${p.toFixed(0)}%</span>`;
+  }
+
+  async function renderCierres() {
+    app.innerHTML = shell("Cierres de caja", "Cargando datos desde Supabase…", `<div class="wrap wide"><p class="sub">Leyendo cierres…</p></div>`);
+    bindSalir();
+    const C = await loadCierres();
+    const { days, byDay } = C;
+    const first = days[0], last = days[days.length - 1];
+    if (!S.cDia || !byDay[S.cDia]) S.cDia = last.d;
+    const yr = Number(last.d.slice(0, 4)), prevYr = yr - 1;
+    const curMm = Number(last.d.slice(5, 7)), curDd = Number(last.d.slice(8, 10));
+    const ymNow = last.d.slice(0, 7);
+    const ymPrev = `${prevYr}-${last.d.slice(5, 7)}`;
+
+    const rng = (a, b) => {
+      const ds = days.filter((x) => x.d >= a && x.d <= b);
+      return { tot: ds.reduce((s, x) => s + x.tot, 0), n: ds.length, cm: ds.reduce((s, x) => s + x.cm, 0), cp: ds.reduce((s, x) => s + x.cp, 0) };
+    };
+    const wIni = addDays(last.d, -6), wPrevIni = `${prevYr}${wIni.slice(4)}`, wPrevFin = `${prevYr}${last.d.slice(4)}`;
+    const sem = rng(wIni, last.d), semPrev = rng(wPrevIni, wPrevFin);
+    const mes = rng(`${ymNow}-01`, last.d), mesPrev = rng(`${ymPrev}-01`, `${ymPrev}-${String(curDd).padStart(2, "0")}`);
+    const ytd = rng(`${yr}-01-01`, last.d), ytdPrev = rng(`${prevYr}-01-01`, `${prevYr}-${last.d.slice(5)}`);
+
+    const u14 = [];
+    for (let i = 13; i >= 0; i--) {
+      const iso = addDays(last.d, -i);
+      u14.push(byDay[iso] || { d: iso, tot: null, cm: 0, cp: 0, secs: {} });
+    }
+    const meses = [];
+    for (let m = 1; m <= curMm; m++) {
+      const mm = String(m).padStart(2, "0");
+      const cut = m === curMm ? String(curDd).padStart(2, "0") : "31";
+      const rA = rng(`${prevYr}-${mm}-01`, `${prevYr}-${mm}-${cut}`);
+      const rB = rng(`${yr}-${mm}-01`, `${yr}-${mm}-${cut}`);
+      meses.push({ m, yA: rA.tot, nA: rA.n, yB: rB.tot, nB: rB.n });
+    }
+    const allMonths = [...new Set(days.map((x) => x.d.slice(0, 7)))].sort().reverse();
+    const ticket = last.cp ? Math.round(last.tot / last.cp) : 0;
+    const por = last.cm ? Math.round(last.tot / last.cm) : 0;
+
+    app.innerHTML = shell(
+      "Cierres de caja",
+      `Datos reales del ${dmy(first.d)} al ${dmy(last.d)} · ${nf(C.nCierres)} cierres (${nf(days.length)} jornadas) · Solo administración.`,
+      `<div class="wrap wide">
+        <div class="alert">Los datos vienen de la tabla <b>cierres</b> en Supabase. Solo vos los ves. El dashboard anterior sigue funcionando en paralelo hasta que me digas que lo apague.</div>
+        <div class="kpis">
+          <div class="kpi"><div class="l">Último cierre</div><div class="v">${$r(last.tot)}</div><div class="s">${dow(last.d)} ${dmy(last.d)} · ${nf(last.cm)} comensales · ticket ${$r(ticket)} · ${$r(por)} por persona</div></div>
+          <div class="kpi"><div class="l">Semana ${wIni.slice(8, 10)} al ${last.d.slice(8, 10)}/${last.d.slice(5, 7)}</div><div class="v">${$k(sem.tot)}</div><div class="s">${sem.n} noches · ${nf(sem.cm)} comensales · ${varHtml(sem.tot, semPrev.tot)} vs ${prevYr} (${semPrev.n} noches con cierre)</div></div>
+          <div class="kpi"><div class="l">${MES_L[curMm]} (1 al ${curDd})</div><div class="v">${$k(mes.tot)}</div><div class="s">${mes.n} días con cierre · ${varHtml(mes.tot, mesPrev.tot)} vs ${prevYr} (${mesPrev.n} días con cierre)</div></div>
+          <div class="kpi"><div class="l">${yr}, hasta el ${last.d.slice(8, 10)}/${last.d.slice(5, 7)}</div><div class="v">${$k(ytd.tot)}</div><div class="s">${ytd.n} días con cierre · ${varHtml(ytd.tot, ytdPrev.tot)} vs ${prevYr} (${ytdPrev.n} días). En ${prevYr} faltan cierres; no son noches de $0.</div></div>
+        </div>
+        <div class="charts">
+          <div class="card"><h3>Últimos 14 días</h3><p class="hint">Total del día, en pesos.</p><div class="chartbox"><canvas id="c14"></canvas></div></div>
+          <div class="card"><h3>Mes contra mes</h3><p class="hint">${yr} frente a ${prevYr}. ${MES_L[curMm]} hasta el día ${curDd}. Solo días con cierre recibido.</p><div class="chartbox"><canvas id="cmes"></canvas></div></div>
+        </div>
+        <div class="card">
+          <div class="cardhead">
+            <div><h3>Detalle por día</h3><p class="hint" style="margin:0">Tocá un día para ver sus medios de pago, mozos y movimientos de caja abajo.</p></div>
+            <select class="fil" id="cPerSel">
+              <option value="14d"${S.cPer === "14d" ? " selected" : ""}>Últimos 14 días</option>
+              ${allMonths.map((m) => `<option value="${m}"${S.cPer === m ? " selected" : ""}>${MES_L[Number(m.slice(5))]} ${m.slice(0, 4)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="scroll"><table>
+            <thead><tr><th class="l">Día</th><th>Total</th><th>Mesas</th><th>Delivery</th><th>Comensales</th><th>Comprobantes</th><th>Ticket</th></tr></thead>
+            <tbody id="cDaysBody"></tbody>
+          </table></div>
+        </div>
+        <div class="charts" id="cDet"></div>
+        <div id="cMov"></div>
+        <p class="foot">Total histórico en la base: ${$r(C.histTotal)} en ${nf(C.nCierres)} cajas (N° ${C.cMin}–${C.cMax}).${C.gapsTxt ? ` Faltan cierres N° ${C.gapsTxt} (no llegaron por mail).` : ""}</p>
+      </div>`
+    );
+    bindSalir();
+
+    function drawTable() {
+      const rows = S.cPer === "14d" ? u14 : days.filter((x) => x.d.startsWith(S.cPer));
+      $("#cDaysBody").innerHTML = rows.map((r) => {
+        if (r.tot == null) return `<tr><td class="l">${dmy(r.d)} <span class="dow">${dow(r.d)}</span></td><td colspan="6" class="muted">Sin cierre recibido</td></tr>`;
+        const on = r.d === S.cDia ? " on" : "";
+        return `<tr class="pick${on}" data-d="${r.d}"><td class="l">${dmy(r.d)} <span class="dow">${dow(r.d)}</span></td>
+          <td>${$r(r.tot)}</td><td>${$r(r.secs.MESAS || 0)}</td><td>${$r(r.secs.DELIVERY || 0)}</td>
+          <td>${nf(r.cm)}</td><td>${nf(r.cp)}</td><td>${r.cp ? $r(r.tot / r.cp) : "—"}</td></tr>`;
+      }).join("");
+    }
+
+    function drawDayDetail() {
+      const sel = byDay[S.cDia] || last;
+      const pagos = Object.entries(sel.pagos).sort((a, b) => b[1] - a[1]);
+      const mozos = Object.entries(sel.mozos).sort((a, b) => b[1].ventas - a[1].ventas);
+      $("#cDet").innerHTML = `
+        <div class="card">
+          <h3>Medios de pago · ${dmy(sel.d)}</h3>
+          <p class="hint">${dow(sel.d)} · Total ${$r(sel.tot)} (${sel.cajas.map((c) => "caja " + c).join(", ")})</p>
+          <table><thead><tr><th class="l">Medio</th><th>Total</th></tr></thead>
+          <tbody>${pagos.map(([k, v]) => `<tr><td class="l">${esc(k)}</td><td>${$r(v)}</td></tr>`).join("")}</tbody></table>
+        </div>
+        <div class="card">
+          <h3>Mozos · ${dmy(sel.d)}</h3>
+          <p class="hint">Ventas por mozo o estación, ese mismo día.</p>
+          <table><thead><tr><th class="l">Mozo</th><th>Ops</th><th>Ventas</th></tr></thead>
+          <tbody>${mozos.map(([k, m]) => `<tr><td class="l">${esc(k)}</td><td>${nf(m.ops)}</td><td>${$r(m.ventas)}</td></tr>`).join("")}</tbody></table>
+        </div>`;
+      $("#cMov").innerHTML = sel.mv.length ? `<div class="card">
+        <h3>Movimientos de caja · ${dmy(sel.d)}</h3>
+        <p class="hint">Entradas y salidas registradas en caja (no son ventas).</p>
+        <table><thead><tr><th class="l">Tipo</th><th class="l">Detalle</th><th>Monto</th></tr></thead>
+        <tbody>${sel.mv.map((x) => `<tr><td class="l">${esc(x.tipo)}</td><td class="l">${esc(x.detalle)}</td><td>${$r(x.monto)}</td></tr>`).join("")}</tbody></table>
+      </div>` : "";
+    }
+
+    drawTable();
+    drawDayDetail();
+    $("#cPerSel").onchange = (e) => { S.cPer = e.target.value; drawTable(); };
+    $("#cDaysBody").onclick = (e) => {
+      const tr = e.target.closest("tr.pick"); if (!tr) return;
+      S.cDia = tr.dataset.d;
+      drawTable();
+      drawDayDetail();
+    };
+
+    if (window.Chart) {
+      Object.values(S.cCharts).forEach((ch) => ch && ch.destroy && ch.destroy());
+      const tick = { color: "#8b93a7", font: { size: 11 } };
+      const grid = { color: "#262a35" };
+      const money = (v) => (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + " M" : Math.abs(v) >= 1e3 ? Math.round(v / 1e3) + " mil" : String(v));
+      S.cCharts.c14 = new Chart($("#c14"), {
+        type: "bar",
+        data: {
+          labels: u14.map((r) => r.d.slice(8) + "/" + r.d.slice(5, 7)),
+          datasets: [{ data: u14.map((r) => r.tot), backgroundColor: "#f5b301", borderRadius: 4, maxBarThickness: 28 }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => (x.raw == null ? "Sin cierre" : $r(x.raw)) } } },
+          scales: { x: { ticks: tick, grid: { display: false } }, y: { ticks: { ...tick, callback: money }, grid } },
+        },
+      });
+      S.cCharts.cmes = new Chart($("#cmes"), {
+        type: "bar",
+        data: {
+          labels: meses.map((m) => MES[m.m]),
+          datasets: [
+            { label: String(prevYr), data: meses.map((m) => m.yA), backgroundColor: "#8b93a7", borderRadius: 3, maxBarThickness: 16 },
+            { label: String(yr), data: meses.map((m) => m.yB), backgroundColor: "#f5b301", borderRadius: 3, maxBarThickness: 16 },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: "#e8ebf2", boxWidth: 12 } },
+            tooltip: { callbacks: { label: (x) => `${x.dataset.label}: ${$r(x.raw)}` } },
+          },
+          scales: { x: { ticks: tick, grid: { display: false } }, y: { ticks: { ...tick, callback: money }, grid } },
+        },
+      });
+    }
   }
 
   function selCat(it) {

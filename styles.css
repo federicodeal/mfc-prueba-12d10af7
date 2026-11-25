@@ -94,3 +94,20 @@ select.cat{font-size:12px;padding:4px 8px}
 .barstock{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 16px 0}
 .barstock input,.barstock label{font-size:15px}
 .barstock input[type=date],.barstock input[type=text],.barstock input[type=search]{min-height:44px;border-radius:10px}
+
+/* tableros admin */
+.wrap.wide{max-width:1200px}
+.opts.tres{grid-template-columns:repeat(3,1fr)}
+@media(max-width:900px){.opts.tres{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){.opts.tres{grid-template-columns:1fr}}
+a.opt .kpi-mini{margin-top:10px;font-size:18px;font-weight:700}
+a.opt .kpi-mini span{font-size:12px;color:var(--muted);font-weight:500;display:block;margin-top:2px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.charts .card,.chartbox{min-width:0;overflow:hidden}
+@media(max-width:900px){.charts{grid-template-columns:1fr}}
+.chartbox{height:280px;position:relative}
+.up{color:#6fdd9d}.down{color:#f0a0a0}
+.muted{color:var(--muted)}
+td.l .dow{color:var(--muted);font-size:12px;margin-left:6px}
+tr.pick{cursor:pointer}tr.pick:hover{background:#222634}tr.pick.on{background:#262b3a}
+.cardhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px}
