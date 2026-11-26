@@ -540,7 +540,7 @@
         it.producto_key = key;
         const lines = await fetchLineas(it.rut, key, desde, hasta);
         $("#histKpis", modal).innerHTML = kpisLineas(lines);
-        const tit = `<div class="hint">Compras ${periodoTxt(desde, hasta)}: ${nf(lines.length)} renglón${lines.length === 1 ? "" : "es"}.</div>`;
+        const tit = `<div class="hint">Compras ${periodoTxt(desde, hasta)}: ${nf(lines.length)} ${lines.length === 1 ? "renglón" : "renglones"}.</div>`;
         $("#histTabla", modal).innerHTML = tit + tablaLineas(lines, false);
       } catch (e) {
         $("#histTabla", modal).innerHTML = `<div class="alert warn">No se pudieron cargar las compras: ${esc(e.message || e)}</div>`;
