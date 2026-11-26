@@ -33,7 +33,7 @@
         pages[i] = data;
       }
     };
-    await Promise.all(Array.from({ length: 8 }, worker));
+    await Promise.all(Array.from({ length: 16 }, worker));
     pages.forEach((p) => { out = out.concat(p); });
     return out;
   }
@@ -58,7 +58,7 @@
     const sb = M.sb;
     const [T, L, C] = await Promise.all([
       fetchAll(() => sb.from("ventas_tickets").select("clave,fecha_emision,canal,cerrado_en,mozo_nombre,es_nota_credito", { count: "exact" }).eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
-      fetchAll(() => sb.from("ventas_lineas").select("clave,ticket_clave,fecha_emision,codigo_pos,nombre_pos,cantidad,total", { count: "exact" }).eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
+      fetchAll(() => sb.from("ventas_lineas").select("ticket_clave,fecha_emision,codigo_pos,nombre_pos,cantidad,total", { count: "exact" }).eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
       fetchAll(() => sb.from("cierres").select("id,jornada,total_ventas", { count: "exact" }).gte("jornada", V.desde).lte("jornada", V.hasta).order("id")),
     ]);
     const tot = {};
