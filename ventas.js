@@ -14,15 +14,28 @@
   const norm = (s) => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const addDays = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
 
+  // Trae todas las filas en páginas de 1000. La primera página trae el total (count) y las demás se piden en paralelo.
   async function fetchAll(q) {
-    let out = [], from = 0;
-    for (;;) {
-      const { data, error } = await q().range(from, from + 999);
-      if (error) throw error;
-      out = out.concat(data);
-      if (data.length < 1000) return out;
-      from += 1000;
-    }
+    const first = await q().range(0, 999);
+    if (first.error) throw first.error;
+    let out = first.data;
+    const total = first.count == null ? out.length : first.count;
+    if (out.length < 1000 || total <= 1000) return out;
+    const starts = [];
+    for (let f = 1000; f < total; f += 1000) starts.push(f);
+    const pages = new Array(starts.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < starts.length) {
+        const i = next++;
+        const { data, error } = await q().range(starts[i], starts[i] + 999);
+        if (error) throw error;
+        pages[i] = data;
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    pages.forEach((p) => { out = out.concat(p); });
+    return out;
   }
 
   async function init(M) {
@@ -30,7 +43,7 @@
     const [mx, mn, codigos] = await Promise.all([
       sb.from("ventas_tickets").select("fecha_emision").order("fecha_emision", { ascending: false }).limit(1),
       sb.from("ventas_tickets").select("fecha_emision").order("fecha_emision", { ascending: true }).limit(1),
-      fetchAll(() => sb.from("ventas_codigos").select("codigo_pos,nombre_pos,tipo").order("codigo_pos")),
+      fetchAll(() => sb.from("ventas_codigos").select("codigo_pos,nombre_pos,tipo", { count: "exact" }).order("codigo_pos")),
     ]);
     if (mx.error) throw mx.error;
     V.max = mx.data[0] ? mx.data[0].fecha_emision : null;
@@ -44,9 +57,9 @@
     if (V.key === key && V.data) return V.data;
     const sb = M.sb;
     const [T, L, C] = await Promise.all([
-      fetchAll(() => sb.from("ventas_tickets").select("clave,fecha_emision,canal,cerrado_en,mozo_nombre,es_nota_credito").eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
-      fetchAll(() => sb.from("ventas_lineas").select("clave,ticket_clave,fecha_emision,codigo_pos,nombre_pos,cantidad,total").eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
-      fetchAll(() => sb.from("cierres").select("id,jornada,total_ventas").gte("jornada", V.desde).lte("jornada", V.hasta).order("id")),
+      fetchAll(() => sb.from("ventas_tickets").select("clave,fecha_emision,canal,cerrado_en,mozo_nombre,es_nota_credito", { count: "exact" }).eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
+      fetchAll(() => sb.from("ventas_lineas").select("clave,ticket_clave,fecha_emision,codigo_pos,nombre_pos,cantidad,total", { count: "exact" }).eq("es_venta", true).gte("fecha_emision", V.desde).lte("fecha_emision", V.hasta).order("clave")),
+      fetchAll(() => sb.from("cierres").select("id,jornada,total_ventas", { count: "exact" }).gte("jornada", V.desde).lte("jornada", V.hasta).order("id")),
     ]);
     const tot = {};
     L.forEach((l) => { tot[l.ticket_clave] = (tot[l.ticket_clave] || 0) + Number(l.total); });
@@ -61,7 +74,7 @@
   async function loadDet(M, code) {
     const key = [code, V.pd, V.ph].join("|");
     if (V.detKey === key) return V.det;
-    const rows = await fetchAll(() => M.sb.from("ventas_lineas").select("clave,fecha_emision,cantidad,total,ventas_tickets!inner(canal,es_venta)").eq("codigo_pos", code).eq("es_venta", true).eq("ventas_tickets.es_venta", true).gte("fecha_emision", V.pd).lte("fecha_emision", V.ph).order("clave"));
+    const rows = await fetchAll(() => M.sb.from("ventas_lineas").select("clave,fecha_emision,cantidad,total,ventas_tickets!inner(canal,es_venta)", { count: "exact" }).eq("codigo_pos", code).eq("es_venta", true).eq("ventas_tickets.es_venta", true).gte("fecha_emision", V.pd).lte("fecha_emision", V.ph).order("clave"));
     V.det = rows.map((r) => ({ f: r.fecha_emision, canal: r.ventas_tickets.canal, q: Number(r.cantidad), v: Number(r.total) })); V.detKey = key;
     return V.det;
   }
