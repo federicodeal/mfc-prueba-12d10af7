@@ -32,7 +32,7 @@
   const rol = () => S.perfil && S.perfil.rol;
   const can = (sec) => {
     const r = rol(); if (!r) return false;
-    if (sec === "cierres" || sec === "carta" || sec === "compras") return r === "admin";
+    if (sec === "cierres" || sec === "carta" || sec === "compras" || sec === "ventas") return r === "admin";
     if (sec === "stock") return !!STOCK_CATS[r];
     return r === "admin" || r === "encargado";
   };
@@ -114,6 +114,7 @@
     }
     try {
       if (h === "/cierres" && can("cierres")) return await renderCierres();
+      if (h === "/ventas" && can("ventas")) return await window.MF_ventas({ sb, shell, bindSalir, esc, app });
       if (h === "/carta" && can("carta")) return await window.MF_carta({ sb, shell, bindSalir, esc, $r, nf, app, toast });
       if (h === "/catalogo" && can("catalogo")) return await renderCatalogo();
       if (h === "/compras" && can("compras")) return await renderCompras();
@@ -125,7 +126,7 @@
   }
 
   function shell(title, sub, body, extra, wide) {
-    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")], ["#/carta", "Carta / Recetas", can("carta")],
+    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")], ["#/ventas", "Ventas", can("ventas")], ["#/carta", "Carta / Recetas", can("carta")],
       ["#/catalogo", "Catálogo", can("catalogo")], ["#/compras", "Compras", can("compras")],
       ["#/stock", "Ingreso de stock", can("stock")],
       ["#/novedades", "Novedades", can("novedades")]].filter((x) => x[2]);
