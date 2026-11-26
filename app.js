@@ -428,9 +428,9 @@
     const k = {}; CATS.forEach((c) => (k[c] = 0)); base.forEach((i) => (k[i.categoria] = (k[i.categoria] || 0) + 1));
     const revisa = base.filter((i) => i.estado === "a_revisar");
     const fechas = items.map((i) => i.ultima_fecha).filter(Boolean).sort();
-    const adminHint = rol() === "admin" ? " Si un producto ya no se compra, desactivalo: no se borra el historial y deja de aparecer en el recuento." : "";
+    const adminHint = rol() === "admin" ? " Si un producto ya no se compra, desactivalo: no se borra el historial y deja de aparecer en el recuento de stock." : "";
     app.innerHTML = shell("Catálogo de compras",
-      `Artículos desde FacturaExpress${fechas.length ? ", hasta el " + dmy(fechas[fechas.length - 1]) : ""}. Cambiar la categoría la guarda al momento y la marca como confirmada.${adminHint}`,
+      `Artículos desde FacturaExpress${fechas.length ? ", hasta el " + dmy(fechas[fechas.length - 1]) : ""}.`,
       `<div class="wrap">
       <div class="kpis">
         <div class="kpi"><div class="l">Artículos activos</div><div class="v">${nf(base.length)}</div><div class="s">${nf(provs.length)} proveedores</div></div>
@@ -445,7 +445,7 @@
         <tbody>${revisa.map((i) => rowItem(i, true)).join("")}</tbody></table></div>` : `<div class="empty">No hay artículos en duda. 🎉</div>`}
       </div>
       <div class="card"><h3>${S.verOff ? "Artículos desactivados" : "Catálogo completo"}</h3>
-        <div class="hint">${S.verOff ? "Estos productos no aparecen en el recuento de stock. El historial de compras se mantiene. Podés reactivarlos." : "Filtrá por categoría, proveedor o nombre. Podés cambiar la categoría de cualquier artículo."}</div>
+        <div class="hint">${S.verOff ? "Estos productos no aparecen en el recuento de stock. El historial de compras se mantiene. Podés reactivarlos." : "Filtrá por categoría, proveedor o nombre. Cambiar la categoría la guarda al momento y la marca como confirmada."}${adminHint}</div>
         <div class="barf"><div class="seg" id="segCat"></div>
           ${rol() === "admin" ? `<button type="button" class="btn ghost" id="btnOff">${S.verOff ? "Ver activos" : "Ver desactivados (" + off.length + ")"}</button>` : ""}
           <select class="fil" id="filProv"><option value="">Todos los proveedores</option>${provs.map(([r, n]) => `<option value="${esc(r)}">${esc(n)}</option>`).join("")}</select>
