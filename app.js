@@ -32,7 +32,7 @@
   const rol = () => S.perfil && S.perfil.rol;
   const can = (sec) => {
     const r = rol(); if (!r) return false;
-    if (sec === "cierres" || sec === "carta") return r === "admin";
+    if (sec === "cierres" || sec === "carta" || sec === "compras") return r === "admin";
     if (sec === "stock") return !!STOCK_CATS[r];
     return r === "admin" || r === "encargado";
   };
@@ -116,6 +116,7 @@
       if (h === "/cierres" && can("cierres")) return await renderCierres();
       if (h === "/carta" && can("carta")) return await window.MF_carta({ sb, shell, bindSalir, esc, $r, nf, app, toast });
       if (h === "/catalogo" && can("catalogo")) return await renderCatalogo();
+      if (h === "/compras" && can("compras")) return await renderCompras();
       if (h === "/stock" && can("stock")) return await renderStock();
       if (h === "/novedades" && can("novedades")) return await renderNovedades();
       if (!can("catalogo") && can("stock") && h !== "/inicio") { location.hash = "#/stock"; return; }
@@ -125,7 +126,8 @@
 
   function shell(title, sub, body, extra, wide) {
     const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")], ["#/carta", "Carta / Recetas", can("carta")],
-      ["#/catalogo", "Catálogo", can("catalogo")], ["#/stock", "Ingreso de stock", can("stock")],
+      ["#/catalogo", "Catálogo", can("catalogo")], ["#/compras", "Compras", can("compras")],
+      ["#/stock", "Ingreso de stock", can("stock")],
       ["#/novedades", "Novedades", can("novedades")]].filter((x) => x[2]);
     const here = location.hash || "#/inicio";
     return `<header class="top"><div class="toprow"><div>
@@ -187,6 +189,8 @@
     }
     if (can("catalogo")) cards.push(`<a class="opt" href="#/catalogo"><div class="ic">🏷️</div><div class="t">Catálogo</div>
       <div class="d">Artículos de FacturaExpress en Cocina, Barra, Cocina y Barra u Otros. Acá se acomodan los "a revisar".</div><div class="go">Entrar →</div></a>`);
+    if (can("compras")) cards.push(`<a class="opt" href="#/compras"><div class="ic">🧾</div><div class="t">Compras por producto</div>
+      <div class="d">Buscá un artículo y un rango de fechas para ver cuánto se compró, el monto y el precio promedio, factura por factura.</div><div class="go">Entrar →</div></a>`);
     if (can("stock")) cards.push(`<a class="opt" href="#/stock"><div class="ic">📦</div><div class="t">Ingreso de stock</div>
       <div class="d">Recuento de mercadería por categoría, pensado para la tablet.</div><div class="go">Entrar →</div></a>`);
     if (can("novedades")) cards.push(`<a class="opt" href="#/novedades"><div class="ic">🆕</div><div class="t">Novedades de la semana</div>
@@ -377,7 +381,10 @@
     const btn = (edit && rol() === "admin")
       ? `<button type="button" class="btn mini ${it.activo === false ? "" : "ghost"}" data-act="${it.id}">${it.activo === false ? "Activar" : "Desactivar"}</button>`
       : "";
-    return `<tr data-id="${it.id}" class="${it.activo === false ? "off" : ""}"><td class="l"><div class="prod">${esc(it.producto)}</div>
+    const nom = (rol() === "admin")
+      ? `<button type="button" class="link-hist" data-hist="${it.id}">${esc(it.producto)}</button>`
+      : esc(it.producto);
+    return `<tr data-id="${it.id}" class="${it.activo === false ? "off" : ""}"><td class="l"><div class="prod">${nom}</div>
       <div class="meta">${esc(it.razon_social)}${it.unidad ? " · " + esc(it.unidad) : ""}${it.motivo ? " · " + esc(it.motivo) : ""} · ${last} ${sug}${off}</div></td>
       <td>${edit ? selCat(it) : `<span class="pill ${pill(it.categoria)}">${esc(it.categoria)}</span>`}<span class="est">${estPill(it.estado)}</span></td>
       <td>${it.ultimo_precio == null ? "—" : $u(it.ultimo_precio, it.moneda_ultimo)}</td><td>${$u(it.monto_uyu, "UYU")}</td>
@@ -395,6 +402,13 @@
         if (it) { it.categoria = cat; it.estado = "confirmado"; }
         const tr = el.closest("tr"); if (tr) tr.querySelector(".est").innerHTML = estPill("confirmado");
         toast("Guardado: " + cat, true);
+      };
+    });
+    root.querySelectorAll("button[data-hist]").forEach((el) => {
+      el.onclick = (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        const it = S.items && S.items.find((x) => x.id === +el.dataset.hist);
+        if (it) openHistorial(it);
       };
     });
     root.querySelectorAll("button[data-act]").forEach((el) => {
@@ -415,6 +429,275 @@
         renderCatalogo();
       };
     });
+  }
+
+
+  const nq = (n) => {
+    if (n == null || n === "") return "—";
+    const x = Number(n);
+    if (!Number.isFinite(x)) return "—";
+    const d = Math.abs(x - Math.round(x)) < 1e-9 ? 0 : 2;
+    return x.toLocaleString("es-UY", { minimumFractionDigits: d, maximumFractionDigits: 2 });
+  };
+  const normQ = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  async function loadKeys() {
+    if (S.keys) return S.keys;
+    const rows = await fetchAll("articulos", "id,producto_key");
+    S.keys = new Map(rows.map((r) => [r.id, r.producto_key]));
+    if (S.items) S.items.forEach((i) => { if (!i.producto_key) i.producto_key = S.keys.get(i.id); });
+    return S.keys;
+  }
+
+  async function fetchLineas(rut, productoKey, desde, hasta) {
+    const sel = "clave,fecha_emision,tipo,serie,numero,rut,producto,cant,precio_unitario,total,monto,moneda,iva,producto_key";
+    return fetchAll("compra_lineas", sel, (q) => {
+      q = q.eq("rut", rut).eq("producto_key", productoKey).order("fecha_emision", { ascending: false }).order("clave", { ascending: false });
+      if (desde) q = q.gte("fecha_emision", desde);
+      if (hasta) q = q.lte("fecha_emision", hasta);
+      return q;
+    });
+  }
+
+  function totLineas(lines) {
+    const g = {};
+    for (const l of lines) {
+      const m = l.moneda || "UYU";
+      if (!g[m]) g[m] = { moneda: m, cant: 0, monto: 0, n: 0 };
+      g[m].cant += Number(l.cant) || 0;
+      g[m].monto += Number(l.monto != null ? l.monto : l.total) || 0;
+      g[m].n += 1;
+    }
+    return Object.values(g);
+  }
+
+  function kpisLineas(lines) {
+    const tots = totLineas(lines);
+    if (!tots.length) return `<div class="kpi"><div class="l">Compras en el período</div><div class="v">0</div><div class="s">No hay movimientos en esas fechas</div></div>`;
+    return tots.map((t) => {
+      const avg = t.cant ? t.monto / t.cant : null;
+      return `<div class="kpi"><div class="l">Cantidad${tots.length > 1 ? " (" + t.moneda + ")" : ""}</div><div class="v">${nq(t.cant)}</div><div class="s">${t.n} compra${t.n === 1 ? "" : "s"}</div></div>
+        <div class="kpi"><div class="l">Monto${tots.length > 1 ? " (" + t.moneda + ")" : ""}</div><div class="v">${$u(t.monto, t.moneda)}</div></div>
+        <div class="kpi"><div class="l">Precio promedio</div><div class="v">${avg == null ? "—" : $u(avg, t.moneda)}</div><div class="s">monto dividido la cantidad</div></div>`;
+    }).join("");
+  }
+
+  function tablaLineas(lines, conProv) {
+    if (!lines.length) return `<div class="empty">No hay compras en ese período.</div>`;
+    return `<div class="scroll"><table><thead><tr><th>Fecha</th>${conProv ? "<th class=\"l\">Proveedor</th>" : ""}<th class="l">Factura</th><th>Cant.</th><th>Precio unit.</th><th>Monto</th></tr></thead>
+      <tbody>${lines.map((l) => `<tr>
+        <td>${dmy(l.fecha_emision)}</td>
+        ${conProv ? `<td class="l">${esc(l.razon_social || "")}</td>` : ""}
+        <td class="l"><div class="prod">${esc((l.serie || "") + "-" + (l.numero || ""))}</div>
+          <div class="meta">${esc(l.tipo || "")}${l.moneda && l.moneda !== "UYU" ? " · " + esc(l.moneda) : ""}</div></td>
+        <td>${nq(l.cant)}</td>
+        <td>${l.precio_unitario == null ? "—" : $u(l.precio_unitario, l.moneda)}</td>
+        <td>${$u(l.monto != null ? l.monto : l.total, l.moneda)}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+  }
+
+  function periodoTxt(desde, hasta) {
+    if (desde && hasta) return `del ${dmy(desde)} al ${dmy(hasta)}`;
+    if (desde) return `desde el ${dmy(desde)}`;
+    if (hasta) return `hasta el ${dmy(hasta)}`;
+    return "en todo el historial";
+  }
+
+  async function openHistorial(it, desde0, hasta0) {
+    if (rol() !== "admin") return;
+    document.querySelectorAll(".modal.hist").forEach((el) => el.remove());
+    const modal = document.createElement("div");
+    modal.className = "modal hist";
+    modal.innerHTML = `<div class="box">
+      <button type="button" class="x" id="histX">Cerrar</button>
+      <h2>${esc(it.producto)}</h2>
+      <div class="sub" style="margin-bottom:12px">${esc(it.razon_social)}${it.unidad ? " · " + esc(it.unidad) : ""}</div>
+      <div class="barf">
+        <label class="dl">Desde <input type="date" id="histDesde"></label>
+        <label class="dl">Hasta <input type="date" id="histHasta"></label>
+        <button type="button" class="btn ghost" id="histFiltrar">Filtrar</button>
+        <button type="button" class="btn ghost" id="histTodo">Ver todo</button>
+      </div>
+      <div class="kpis" id="histKpis"></div>
+      <div id="histTabla"><div class="empty">Cargando…</div></div>
+    </div>`;
+    document.body.appendChild(modal);
+    const close = () => { modal.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+    $("#histX", modal).onclick = close;
+    const di = $("#histDesde", modal), hi = $("#histHasta", modal);
+    di.value = desde0 || ""; hi.value = hasta0 || "";
+
+    const pintar = async () => {
+      const desde = di.value || "", hasta = hi.value || "";
+      $("#histTabla", modal).innerHTML = `<div class="empty">Cargando…</div>`;
+      try {
+        await loadKeys();
+        const key = it.producto_key || S.keys.get(it.id);
+        if (!key) { $("#histTabla", modal).innerHTML = `<div class="empty">No pude identificar este producto.</div>`; return; }
+        it.producto_key = key;
+        const lines = await fetchLineas(it.rut, key, desde, hasta);
+        $("#histKpis", modal).innerHTML = kpisLineas(lines);
+        const tit = `<div class="hint">Compras ${periodoTxt(desde, hasta)}: ${nf(lines.length)} renglón${lines.length === 1 ? "" : "es"}.</div>`;
+        $("#histTabla", modal).innerHTML = tit + tablaLineas(lines, false);
+      } catch (e) {
+        $("#histTabla", modal).innerHTML = `<div class="alert warn">No se pudieron cargar las compras: ${esc(e.message || e)}</div>`;
+      }
+    };
+    $("#histFiltrar", modal).onclick = pintar;
+    $("#histTodo", modal).onclick = () => { di.value = ""; hi.value = ""; pintar(); };
+    di.addEventListener("keydown", (e) => { if (e.key === "Enter") pintar(); });
+    hi.addEventListener("keydown", (e) => { if (e.key === "Enter") pintar(); });
+    await pintar();
+  }
+
+  async function renderCompras() {
+    app.innerHTML = shell("Compras por producto", "Cargando…", `<div class="wrap"><div class="empty">Cargando…</div></div>`); bindSalir();
+    const items = await loadItems();
+    await loadKeys();
+    if (S.cq == null) S.cq = "";
+    if (S.cDesde == null) S.cDesde = "";
+    if (S.cHasta == null) S.cHasta = "";
+    const fechas = items.map((i) => i.ultima_fecha).filter(Boolean).sort();
+    app.innerHTML = shell("Compras por producto",
+      `Historial de compras desde FacturaExpress${fechas.length ? ", hasta el " + dmy(fechas[fechas.length - 1]) : ""}.`,
+      `<div class="wrap">
+        <div class="hint">Escribí un producto (y, si querés, un proveedor) y un rango de fechas para ver cuánto se compró en ese período: cantidad, monto y precio promedio. Tocá un resultado para ver cada factura. También podés abrir el mismo detalle desde el Catálogo, tocando el nombre del producto.</div>
+        <div class="card"><h3>Buscar compras</h3>
+          <form class="barf" id="formComp">
+            <input type="search" id="qComp" placeholder="Producto o proveedor…" autocomplete="off" style="flex:1;min-width:220px">
+            <label class="dl">Desde <input type="date" id="dComp"></label>
+            <label class="dl">Hasta <input type="date" id="hComp"></label>
+            <button type="submit" class="btn ghost">Buscar</button>
+          </form>
+          <div id="resComp"></div>
+        </div>
+      </div>`);
+    bindSalir();
+    $("#qComp").value = S.cq; $("#dComp").value = S.cDesde; $("#hComp").value = S.cHasta;
+    $("#formComp").onsubmit = (e) => {
+      e.preventDefault();
+      S.cq = $("#qComp").value; S.cDesde = $("#dComp").value; S.cHasta = $("#hComp").value;
+      buscarCompras(items);
+    };
+    if (S.cq || S.cDesde || S.cHasta) buscarCompras(items);
+    else $("#resComp").innerHTML = `<div class="empty">Escribí un producto o elegí fechas y dale a Buscar.</div>`;
+  }
+
+  async function buscarCompras(items) {
+    const res = $("#resComp");
+    const q = (S.cq || "").trim();
+    const desde = S.cDesde || "", hasta = S.cHasta || "";
+    if (!q && !desde && !hasta) {
+      res.innerHTML = `<div class="empty">Escribí un producto o elegí fechas y dale a Buscar.</div>`;
+      return;
+    }
+    res.innerHTML = `<div class="empty">Buscando…</div>`;
+    try {
+      const words = normQ(q).split(/\s+/).filter(Boolean);
+      const matchItem = (i) => {
+        if (!words.length) return true;
+        const t = normQ((i.producto || "") + " " + (i.razon_social || ""));
+        return words.every((w) => t.includes(w));
+      };
+      const cand = items.filter(matchItem);
+      const byKey = new Map();
+      cand.forEach((i) => {
+        const k = i.producto_key || (S.keys && S.keys.get(i.id));
+        if (k) { i.producto_key = k; byKey.set(i.rut + "|" + k, i); }
+      });
+
+      let rows = [];
+      if (!desde && !hasta) {
+        rows = cand.map((i) => ({
+          it: i,
+          n: i.lineas || 0,
+          cant: null,
+          monto: i.monto_uyu,
+          moneda: "UYU",
+          avg: (i.lineas && i.ultimo_precio != null) ? i.ultimo_precio : null,
+          avgEsUltimo: true,
+          primera: i.primera_fecha,
+          ultima: i.ultima_fecha,
+        })).filter((r) => r.n);
+        rows.sort((a, b) => (b.monto || 0) - (a.monto || 0));
+      } else {
+        const sel = "clave,fecha_emision,tipo,serie,numero,rut,producto,cant,precio_unitario,total,monto,moneda,producto_key";
+        let lines = [];
+        if (q && cand.length && cand.length <= 40) {
+          const packs = await Promise.all(cand.filter((i) => i.producto_key).map((i) => fetchLineas(i.rut, i.producto_key, desde, hasta)));
+          lines = packs.flat();
+        } else {
+          lines = await fetchAll("compra_lineas", sel, (qy) => {
+            qy = qy.order("fecha_emision", { ascending: false });
+            if (desde) qy = qy.gte("fecha_emision", desde);
+            if (hasta) qy = qy.lte("fecha_emision", hasta);
+            return qy;
+          });
+          if (words.length) {
+            lines = lines.filter((l) => {
+              const it = byKey.get(l.rut + "|" + l.producto_key);
+              if (it) return true;
+              const t = normQ((l.producto || "") + " " + (it && it.razon_social || ""));
+              return words.every((w) => t.includes(w));
+            });
+          }
+        }
+        const g = new Map();
+        for (const l of lines) {
+          const k = l.rut + "|" + l.producto_key;
+          if (!g.has(k)) g.set(k, []);
+          g.get(k).push(l);
+        }
+        for (const [k, ls] of g) {
+          let it = byKey.get(k);
+          if (!it) {
+            const [rut, pkey] = k.split("|");
+            it = items.find((x) => x.rut === rut && (x.producto_key === pkey || x.producto === ls[0].producto))
+              || { id: null, rut, producto: ls[0].producto, producto_key: pkey, razon_social: rut, unidad: "" };
+          }
+          const tots = totLineas(ls);
+          const main = tots.sort((a, b) => b.monto - a.monto)[0];
+          const fechasL = ls.map((x) => x.fecha_emision).sort();
+          rows.push({
+            it, n: ls.length, cant: main.cant, monto: main.monto, moneda: main.moneda,
+            avg: main.cant ? main.monto / main.cant : null, avgEsUltimo: false,
+            extra: tots.length > 1 ? tots : null,
+            primera: fechasL[0], ultima: fechasL[fechasL.length - 1],
+          });
+        }
+        rows.sort((a, b) => (b.monto || 0) - (a.monto || 0));
+      }
+
+      if (!rows.length) {
+        res.innerHTML = `<div class="empty">No hay compras ${periodoTxt(desde, hasta)}${q ? " para “" + esc(q) + "”" : ""}.</div>`;
+        return;
+      }
+      const cap = 200;
+      const show = rows.slice(0, cap);
+      res.innerHTML = `<div class="hint">${nf(rows.length)} producto${rows.length === 1 ? "" : "s"} ${periodoTxt(desde, hasta)}${rows.length > cap ? ". Se muestran los 200 de mayor monto; afiná la búsqueda para ver más." : "."}${!desde && !hasta ? " El precio de la columna es el último precio; al abrir el producto ves el promedio del período." : ""}</div>
+        <div class="scroll"><table><thead><tr><th class="l">Artículo / proveedor</th><th>Compras</th><th>Cantidad</th><th>Monto</th><th>${!desde && !hasta ? "Último precio" : "Precio promedio"}</th><th></th></tr></thead>
+        <tbody>${show.map((r) => `<tr>
+          <td class="l"><div class="prod">${r.it.id ? `<button type="button" class="link-hist" data-hid="${r.it.id}" data-hrut="${esc(r.it.rut)}" data-hkey="${esc(r.it.producto_key || "")}">${esc(r.it.producto)}</button>` : esc(r.it.producto)}</div>
+            <div class="meta">${esc(r.it.razon_social)}${r.primera ? " · " + dmy(r.primera) + " a " + dmy(r.ultima) : ""}</div></td>
+          <td>${nf(r.n)}</td>
+          <td>${r.cant == null ? "—" : nq(r.cant)}</td>
+          <td>${$u(r.monto, r.moneda)}</td>
+          <td>${r.avg == null ? "—" : $u(r.avg, r.moneda)}</td>
+          <td></td>
+        </tr>`).join("")}</tbody></table></div>`;
+      res.querySelectorAll("button[data-hid]").forEach((el) => {
+        el.onclick = () => {
+          const it = items.find((x) => x.id === +el.dataset.hid)
+            || { id: +el.dataset.hid, rut: el.dataset.hrut, producto_key: el.dataset.hkey, producto: el.textContent, razon_social: "" };
+          openHistorial(it, desde, hasta);
+        };
+      });
+    } catch (e) {
+      res.innerHTML = `<div class="alert warn">No se pudo buscar: ${esc(e.message || e)}</div>`;
+    }
   }
 
   async function renderCatalogo() {
@@ -445,7 +728,7 @@
         <tbody>${revisa.map((i) => rowItem(i, true)).join("")}</tbody></table></div>` : `<div class="empty">No hay artículos en duda. 🎉</div>`}
       </div>
       <div class="card"><h3>${S.verOff ? "Artículos desactivados" : "Catálogo completo"}</h3>
-        <div class="hint">${S.verOff ? "Estos productos no aparecen en el recuento de stock. El historial de compras se mantiene. Podés reactivarlos." : "Filtrá por categoría, proveedor o nombre. Cambiar la categoría la guarda al momento y la marca como confirmada."}${adminHint}</div>
+        <div class="hint">${S.verOff ? "Estos productos no aparecen en el recuento de stock. El historial de compras se mantiene. Podés reactivarlos." : "Filtrá por categoría, proveedor o nombre. Cambiar la categoría la guarda al momento y la marca como confirmada."}${rol() === "admin" ? " Tocá el nombre de un producto para ver las compras, factura por factura, y filtrar por fechas." : ""}${adminHint}</div>
         <div class="barf"><div class="seg" id="segCat"></div>
           ${rol() === "admin" ? `<button type="button" class="btn ghost" id="btnOff">${S.verOff ? "Ver activos" : "Ver desactivados (" + off.length + ")"}</button>` : ""}
           <select class="fil" id="filProv"><option value="">Todos los proveedores</option>${provs.map(([r, n]) => `<option value="${esc(r)}">${esc(n)}</option>`).join("")}</select>

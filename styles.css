@@ -115,3 +115,10 @@ tr.pick{cursor:pointer}tr.pick:hover{background:#222634}tr.pick.on{background:#2
 tr.off{opacity:.7}
 tr.off .prod{text-decoration:line-through}
 .barf .btn.ghost{margin-top:0;min-height:40px;padding:8px 14px;font-size:13px}
+
+button.link-hist{background:none;border:0;padding:0;margin:0;font:inherit;font-weight:600;color:var(--acc);cursor:pointer;text-align:left;text-decoration:underline;text-underline-offset:2px}
+button.link-hist:hover{color:#fff}
+tr.off button.link-hist{text-decoration:line-through}
+.dl{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;white-space:nowrap}
+.dl input[type=date]{min-height:40px}
+.modal.hist .box{max-width:920px}
