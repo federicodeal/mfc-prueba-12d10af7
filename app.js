@@ -11,7 +11,7 @@
   const $ = (s, el = document) => el.querySelector(s);
   const app = $("#app");
   const S = { perfil: null, items: null, nov: null, cierres: null, cDia: null, cPer: "14d", cCharts: {},
-    catOn: "Todas", prov: "", q: "", stockCat: null, stockQ: "", shown: 60, qty: {}, fecha: hoy(), quien: "" };
+    catOn: "Todas", prov: "", q: "", verOff: false, stockCat: null, stockQ: "", shown: 60, qty: {}, fecha: hoy(), quien: "" };
 
   function hoy() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
   const pill = (c) => ({ Cocina: "ok", Barra: "bar", "Cocina y Barra": "mid", Otros: "bad" }[c] || "");
@@ -32,7 +32,7 @@
   const rol = () => S.perfil && S.perfil.rol;
   const can = (sec) => {
     const r = rol(); if (!r) return false;
-    if (sec === "cierres") return r === "admin";
+    if (sec === "cierres" || sec === "carta") return r === "admin";
     if (sec === "stock") return !!STOCK_CATS[r];
     return r === "admin" || r === "encargado";
   };
@@ -114,6 +114,7 @@
     }
     try {
       if (h === "/cierres" && can("cierres")) return await renderCierres();
+      if (h === "/carta" && can("carta")) return await window.MF_carta({ sb, shell, bindSalir, esc, $r, nf, app, toast });
       if (h === "/catalogo" && can("catalogo")) return await renderCatalogo();
       if (h === "/stock" && can("stock")) return await renderStock();
       if (h === "/novedades" && can("novedades")) return await renderNovedades();
@@ -123,7 +124,7 @@
   }
 
   function shell(title, sub, body, extra, wide) {
-    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")],
+    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")], ["#/carta", "Carta / Recetas", can("carta")],
       ["#/catalogo", "Catálogo", can("catalogo")], ["#/stock", "Ingreso de stock", can("stock")],
       ["#/novedades", "Novedades", can("novedades")]].filter((x) => x[2]);
     const here = location.hash || "#/inicio";
@@ -177,6 +178,8 @@
         <div class="d">Lo que entra cada noche, medios de pago, secciones y comparación con el año pasado.</div>
         ${ultVal ? `<div class="kpi-mini">${ultVal}<span>${ultTxt}</span></div>` : ""}
         <div class="go">Entrar →</div></a>`);
+      cards.push(`<a class="opt" href="#/carta"><div class="ic">📖</div><div class="t">Carta / Recetas</div>
+        <div class="d">La carta en 10 categorías, cada ítem con su receta del Drive, alias de Vectio y lo que falta.</div><div class="go">Entrar →</div></a>`);
       cards.push(`<a class="opt soon" href="#"><div class="ic">🍕</div><div class="t">Ventas <span class="tag">paso 2</span></div>
         <div class="d">Lo que se vende por familia y producto con los CSV de Vectio.</div><div class="go">Próximamente</div></a>`);
       cards.push(`<a class="opt soon" href="#"><div class="ic">⚖️</div><div class="t">Consumos vs compras <span class="tag">paso 3</span></div>
@@ -368,10 +371,17 @@
     return e === "a_revisar" ? `<span class="pill w">a revisar</span>` : e === "confirmado" ? `<span class="pill ok">confirmado</span>` : `<span class="pill">auto</span>`;
   }
   function rowItem(it, edit) {
-    return `<tr data-id="${it.id}"><td class="l"><div class="prod">${esc(it.producto)}</div>
-      <div class="meta">${esc(it.razon_social)}${it.unidad ? " · " + esc(it.unidad) : ""}${it.motivo ? " · " + esc(it.motivo) : ""}</div></td>
+    const sug = it.sugerido_desactivar && it.activo ? `<span class="pill w">sugerido desactivar</span>` : "";
+    const off = it.activo === false ? `<span class="pill bad">desactivado</span>` : "";
+    const last = it.ultima_fecha ? "última compra " + dmy(it.ultima_fecha) : "sin compras";
+    const btn = (edit && rol() === "admin")
+      ? `<button type="button" class="btn mini ${it.activo === false ? "" : "ghost"}" data-act="${it.id}">${it.activo === false ? "Activar" : "Desactivar"}</button>`
+      : "";
+    return `<tr data-id="${it.id}" class="${it.activo === false ? "off" : ""}"><td class="l"><div class="prod">${esc(it.producto)}</div>
+      <div class="meta">${esc(it.razon_social)}${it.unidad ? " · " + esc(it.unidad) : ""}${it.motivo ? " · " + esc(it.motivo) : ""} · ${last} ${sug}${off}</div></td>
       <td>${edit ? selCat(it) : `<span class="pill ${pill(it.categoria)}">${esc(it.categoria)}</span>`}<span class="est">${estPill(it.estado)}</span></td>
-      <td>${it.ultimo_precio == null ? "—" : $u(it.ultimo_precio, it.moneda_ultimo)}</td><td>${$u(it.monto_uyu, "UYU")}</td></tr>`;
+      <td>${it.ultimo_precio == null ? "—" : $u(it.ultimo_precio, it.moneda_ultimo)}</td><td>${$u(it.monto_uyu, "UYU")}</td>
+      <td>${btn}</td></tr>`;
   }
   function bindEdits(root) {
     root.querySelectorAll("select.cat").forEach((el) => {
@@ -387,43 +397,74 @@
         toast("Guardado: " + cat, true);
       };
     });
+    root.querySelectorAll("button[data-act]").forEach((el) => {
+      el.onclick = async () => {
+        if (rol() !== "admin") return;
+        const id = +el.dataset.act;
+        const it = S.items && S.items.find((x) => x.id === id);
+        if (!it) return;
+        const next = it.activo === false;
+        el.disabled = true;
+        const { error } = await sb.from("articulos").update({ activo: next }).eq("id", id);
+        el.disabled = false;
+        if (error) return toast("No se pudo guardar: " + error.message, false);
+        it.activo = next;
+        if (next) it.sugerido_desactivar = !!(it.ultima_fecha && ((Date.now() - new Date(it.ultima_fecha).getTime()) / 864e5) > 90);
+        S.stock = null;
+        toast(next ? "Activado: " + it.producto : "Desactivado: " + it.producto + ". El historial de compras se mantiene.", true);
+        renderCatalogo();
+      };
+    });
   }
 
   async function renderCatalogo() {
     app.innerHTML = shell("Catálogo de compras", "Cargando artículos…", `<div class="wrap"><div class="empty">Cargando…</div></div>`); bindSalir();
     const items = await loadItems();
+    const visible = (i) => (S.verOff ? i.activo === false : i.activo !== false);
+    const base = items.filter((i) => i.activo !== false);
+    const off = items.filter((i) => i.activo === false);
+    const sug = base.filter((i) => i.sugerido_desactivar);
     const provs = [...new Map(items.map((i) => [i.rut, i.razon_social])).entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
-    const k = {}; CATS.forEach((c) => (k[c] = 0)); items.forEach((i) => (k[i.categoria] = (k[i.categoria] || 0) + 1));
-    const revisa = items.filter((i) => i.estado === "a_revisar");
+    const k = {}; CATS.forEach((c) => (k[c] = 0)); base.forEach((i) => (k[i.categoria] = (k[i.categoria] || 0) + 1));
+    const revisa = base.filter((i) => i.estado === "a_revisar");
     const fechas = items.map((i) => i.ultima_fecha).filter(Boolean).sort();
+    const adminHint = rol() === "admin" ? " Si un producto ya no se compra, desactivalo: no se borra el historial y deja de aparecer en el recuento." : "";
     app.innerHTML = shell("Catálogo de compras",
-      `Artículos desde FacturaExpress${fechas.length ? ", hasta el " + dmy(fechas[fechas.length - 1]) : ""}. Cambiar la categoría la guarda al momento y la marca como confirmada.`,
+      `Artículos desde FacturaExpress${fechas.length ? ", hasta el " + dmy(fechas[fechas.length - 1]) : ""}. Cambiar la categoría la guarda al momento y la marca como confirmada.${adminHint}`,
       `<div class="wrap">
       <div class="kpis">
-        <div class="kpi"><div class="l">Artículos</div><div class="v">${nf(items.length)}</div><div class="s">${nf(provs.length)} proveedores</div></div>
+        <div class="kpi"><div class="l">Artículos activos</div><div class="v">${nf(base.length)}</div><div class="s">${nf(provs.length)} proveedores</div></div>
         ${CATS.map((c) => `<div class="kpi"><div class="l">${c}</div><div class="v">${nf(k[c])}</div><div class="s">${c === "Otros" ? "No entran al recuento" : "Para la lista de stock"}</div></div>`).join("")}
         <div class="kpi warn"><div class="l">A revisar</div><div class="v" id="kRev">${nf(revisa.length)}</div><div class="s">Hay que acomodarlos</div></div>
+        ${rol() === "admin" ? `<div class="kpi${sug.length ? " warn" : ""}"><div class="l">Sugeridos a desactivar</div><div class="v">${nf(sug.length)}</div><div class="s">Sin compras hace 90 días o más. No se desactivan solos.</div></div>
+        <div class="kpi"><div class="l">Desactivados</div><div class="v">${nf(off.length)}</div><div class="s">Siguen en el historial</div></div>` : ""}
       </div>
-      <div class="card" id="cardRevisar"><h3>A revisar</h3>
+      <div class="card" id="cardRevisar" ${S.verOff ? "hidden" : ""}><h3>A revisar</h3>
         <div class="hint">La clasificación automática no está segura. Elegí la categoría y queda confirmada.</div>
-        ${revisa.length ? `<div class="scroll"><table><thead><tr><th class="l">Artículo / proveedor</th><th>Categoría</th><th>Último precio</th><th>Monto</th></tr></thead>
+        ${revisa.length ? `<div class="scroll"><table><thead><tr><th class="l">Artículo / proveedor</th><th>Categoría</th><th>Último precio</th><th>Monto</th><th></th></tr></thead>
         <tbody>${revisa.map((i) => rowItem(i, true)).join("")}</tbody></table></div>` : `<div class="empty">No hay artículos en duda. 🎉</div>`}
       </div>
-      <div class="card"><h3>Catálogo completo</h3><div class="hint">Filtrá por categoría, proveedor o nombre. Podés cambiar la categoría de cualquier artículo.</div>
+      <div class="card"><h3>${S.verOff ? "Artículos desactivados" : "Catálogo completo"}</h3>
+        <div class="hint">${S.verOff ? "Estos productos no aparecen en el recuento de stock. El historial de compras se mantiene. Podés reactivarlos." : "Filtrá por categoría, proveedor o nombre. Podés cambiar la categoría de cualquier artículo."}</div>
         <div class="barf"><div class="seg" id="segCat"></div>
+          ${rol() === "admin" ? `<button type="button" class="btn ghost" id="btnOff">${S.verOff ? "Ver activos" : "Ver desactivados (" + off.length + ")"}</button>` : ""}
           <select class="fil" id="filProv"><option value="">Todos los proveedores</option>${provs.map(([r, n]) => `<option value="${esc(r)}">${esc(n)}</option>`).join("")}</select>
           <input type="search" id="qCat" placeholder="Buscar artículo…" autocomplete="off"></div>
         <div class="scroll" id="tblCat"></div></div></div>`);
     bindSalir(); bindEdits($("#cardRevisar"));
     $("#filProv").value = S.prov; $("#qCat").value = S.q;
+    if ($("#btnOff")) $("#btnOff").onclick = () => { S.verOff = !S.verOff; S.catOn = "Todas"; renderCatalogo(); };
     const draw = () => {
       const seg = $("#segCat"); seg.innerHTML = "";
-      ["Todas", "A revisar", ...CATS].forEach((l) => { const b = document.createElement("button"); b.textContent = l; b.className = l === S.catOn ? "on" : ""; b.onclick = () => { S.catOn = l; draw(); }; seg.appendChild(b); });
+      const labs = S.verOff ? ["Todas", ...CATS] : ["Todas", "A revisar", ...(rol() === "admin" ? ["Sugeridos"] : []), ...CATS];
+      labs.forEach((l) => { const b = document.createElement("button"); b.textContent = l; b.className = l === S.catOn ? "on" : ""; b.onclick = () => { S.catOn = l; draw(); }; seg.appendChild(b); });
       const q = S.q.trim().toLowerCase();
-      const rows = items.filter((i) => (!S.prov || i.rut === S.prov) && (S.catOn !== "A revisar" || i.estado === "a_revisar")
+      const rows = items.filter((i) => visible(i) && (!S.prov || i.rut === S.prov)
+        && (S.catOn !== "A revisar" || i.estado === "a_revisar")
+        && (S.catOn !== "Sugeridos" || i.sugerido_desactivar)
         && (!CATS.includes(S.catOn) || i.categoria === S.catOn) && (!q || (i.producto + " " + i.razon_social).toLowerCase().includes(q)));
       const show = rows.slice(0, 300);
-      $("#tblCat").innerHTML = `<table><thead><tr><th class="l">Artículo / proveedor (${nf(rows.length)}${rows.length > 300 ? ", se muestran 300; filtrá para ver más" : ""})</th><th>Categoría</th><th>Último precio</th><th>Monto</th></tr></thead>
+      $("#tblCat").innerHTML = `<table><thead><tr><th class="l">Artículo / proveedor (${nf(rows.length)}${rows.length > 300 ? ", se muestran 300; filtrá para ver más" : ""})</th><th>Categoría</th><th>Último precio</th><th>Monto</th><th></th></tr></thead>
         <tbody>${show.map((i) => rowItem(i, true)).join("")}</tbody></table>`;
       bindEdits($("#tblCat"));
     };
@@ -460,7 +501,7 @@
     if (!S.stockCat || !cats.includes(S.stockCat)) S.stockCat = cats[0];
     if (!S.stock) {
       app.innerHTML = shell("Ingreso de stock", "Cargando artículos…", ""); bindSalir();
-      S.stock = await fetchAll("articulos", "id,rut,producto,categoria,unidad,proveedores(razon_social)", (q) => q.in("categoria", cats).order("producto"));
+      S.stock = await fetchAll("articulos", "id,rut,producto,categoria,unidad,activo,proveedores(razon_social)", (q) => q.in("categoria", cats).eq("activo", true).order("producto"));
     }
     const extra = `<div class="barstock"><label>Fecha</label><input type="date" id="fecha" value="${S.fecha}">
       <label>Quién cuenta</label><input type="text" id="quien" placeholder="Nombre" value="${esc(S.quien)}" autocomplete="off">
