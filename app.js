@@ -126,8 +126,9 @@
   }
 
   function shell(title, sub, body, extra, wide) {
-    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")], ["#/ventas", "Ventas", can("ventas")], ["#/carta", "Carta / Recetas", can("carta")],
-      ["#/catalogo", "Catálogo", can("catalogo")], ["#/compras", "Compras", can("compras")],
+    const links = [["#/inicio", "Inicio", true], ["#/cierres", "Cierres", can("cierres")], ["#/ventas", "Ventas", can("ventas")],
+      ["#/compras", "Compras", can("compras")], ["#/carta", "Carta / Recetas", can("carta")],
+      ["#/catalogo", "Catálogo", can("catalogo")],
       ["#/stock", "Ingreso de stock", can("stock")],
       ["#/novedades", "Novedades", can("novedades")]].filter((x) => x[2]);
     const here = location.hash || "#/inicio";
@@ -190,8 +191,8 @@
     }
     if (can("catalogo")) cards.push(`<a class="opt" href="#/catalogo"><div class="ic">🏷️</div><div class="t">Catálogo</div>
       <div class="d">Artículos de FacturaExpress en Cocina, Barra, Cocina y Barra u Otros. Acá se acomodan los "a revisar".</div><div class="go">Entrar →</div></a>`);
-    if (can("compras")) cards.push(`<a class="opt" href="#/compras"><div class="ic">🧾</div><div class="t">Compras por producto</div>
-      <div class="d">Buscá un artículo y un rango de fechas para ver cuánto se compró, el monto y el precio promedio, factura por factura.</div><div class="go">Entrar →</div></a>`);
+    if (can("compras")) cards.push(`<a class="opt" href="#/compras"><div class="ic">🧾</div><div class="t">Compras</div>
+      <div class="d">Totales, alertas de precio, rankings de productos y proveedores, y la búsqueda por producto y fechas.</div><div class="go">Entrar →</div></a>`);
     if (can("stock")) cards.push(`<a class="opt" href="#/stock"><div class="ic">📦</div><div class="t">Ingreso de stock</div>
       <div class="d">Recuento de mercadería por categoría, pensado para la tablet.</div><div class="go">Entrar →</div></a>`);
     if (can("novedades")) cards.push(`<a class="opt" href="#/novedades"><div class="ic">🆕</div><div class="t">Novedades de la semana</div>
@@ -555,18 +556,19 @@
   }
 
   async function renderCompras() {
-    app.innerHTML = shell("Compras por producto", "Cargando…", `<div class="wrap"><div class="empty">Cargando…</div></div>`); bindSalir();
+    app.innerHTML = shell("Compras", "Cargando…", `<div class="wrap wide"><div class="empty">Cargando compras…</div></div>`); bindSalir();
     const items = await loadItems();
     await loadKeys();
     if (S.cq == null) S.cq = "";
     if (S.cDesde == null) S.cDesde = "";
     if (S.cHasta == null) S.cHasta = "";
-    const fechas = items.map((i) => i.ultima_fecha).filter(Boolean).sort();
-    app.innerHTML = shell("Compras por producto",
-      `Historial de compras desde FacturaExpress${fechas.length ? ", hasta el " + dmy(fechas[fechas.length - 1]) : ""}.`,
-      `<div class="wrap">
-        <div class="hint">Escribí un producto (y, si querés, un proveedor) y un rango de fechas para ver cuánto se compró en ese período: cantidad, monto y precio promedio. Tocá un resultado para ver cada factura. También podés abrir el mismo detalle desde el Catálogo, tocando el nombre del producto.</div>
-        <div class="card"><h3>Buscar compras</h3>
+    const dash = await window.MF_comprasDash.load({ sb, items, esc, $r, $u, nf, nq, dmy });
+    app.innerHTML = shell("Compras",
+      `Datos reales de FacturaExpress, del ${dmy(dash.min)} al ${dmy(dash.max)} · Solo administración.`,
+      `<div class="wrap wide">
+        ${dash.html()}
+        <div class="card" id="busq"><h3>Buscar un producto</h3>
+        <div class="hint">Escribí un producto (y, si querés, un proveedor) y un rango de fechas para ver cuánto se compró: cantidad, monto y precio promedio, factura por factura. También podés abrir el mismo detalle desde el Catálogo, tocando el nombre del producto.</div>
           <form class="barf" id="formComp">
             <input type="search" id="qComp" placeholder="Producto o proveedor…" autocomplete="off" style="flex:1;min-width:220px">
             <label class="dl">Desde <input type="date" id="dComp"></label>
@@ -575,8 +577,10 @@
           </form>
           <div id="resComp"></div>
         </div>
+        <div class="foot">Los rankings de productos son de insumos (cocina y barra). Los proveedores incluyen también luz, aranceles y cambio de moneda. El dashboard anterior sigue en paralelo.</div>
       </div>`);
     bindSalir();
+    dash.bind();
     $("#qComp").value = S.cq; $("#dComp").value = S.cDesde; $("#hComp").value = S.cHasta;
     $("#formComp").onsubmit = (e) => {
       e.preventDefault();

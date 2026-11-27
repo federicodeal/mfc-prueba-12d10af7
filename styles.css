@@ -123,3 +123,16 @@ tr.off button.link-hist{text-decoration:line-through}
 .dl{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;white-space:nowrap}
 .dl input[type=date]{min-height:40px}
 .modal.hist .box{max-width:920px}
+
+/* tablero de compras */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:900px){.two{grid-template-columns:1fr}}
+.alertas{display:flex;flex-direction:column;gap:8px}
+.alerta{background:#12151c;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.alerta.pres{border-color:var(--warnb);background:var(--warn)}
+.alerta .t{font-weight:600;font-size:13px}
+.alerta .m{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.45}
+.barline{display:block;height:5px;border-radius:4px;background:var(--acc);margin-top:4px}
+.rk{width:22px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cant{font-weight:600}
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0 12px}
