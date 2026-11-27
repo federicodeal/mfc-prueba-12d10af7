@@ -1,6 +1,6 @@
 /* Mala Fama Control · Ventas (prueba). Solo admin; datos de ventas_tickets, ventas_lineas, ventas_codigos y cierres (RLS). */
 (function () {
-  const TIPOS = { plato: "Platos", bebida: "Bebidas", trago: "Tragos", extra: "Extras", vaso: "Vasos", tabaco: "Tabaco / cigarrillos", otro: "Otros", invitacion: "Invitaciones", sin_clasificar: "Sin clasificar", envase: "Envases" };
+  const TIPOS = { plato: "Platos", bebida: "Bebidas", trago: "Tragos", extra: "Extras", vaso: "Vasos", tabaco: "Tabaco / cigarrillos", otro: "Otros", invitacion: "Invitaciones", sin_clasificar: "Sin clasificar", envase: "Envases", comodin: "COMODIN (cobros manuales)" };
   const DOW = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
   const V = { desde: null, hasta: null, canal: "todos", q: "alboroto", pd: null, ph: null, sel: null, data: null, key: "", codigos: null, max: null, min: null, charts: {}, det: null, detKey: "" };
   const fm = (n, d = 0) => {
@@ -43,7 +43,7 @@
     const [mx, mn, codigos] = await Promise.all([
       sb.from("ventas_tickets").select("fecha_emision").order("fecha_emision", { ascending: false }).limit(1),
       sb.from("ventas_tickets").select("fecha_emision").order("fecha_emision", { ascending: true }).limit(1),
-      fetchAll(() => sb.from("ventas_codigos").select("codigo_pos,nombre_pos,tipo", { count: "exact" }).order("codigo_pos")),
+      fetchAll(() => sb.from("ventas_codigos").select("codigo_pos,nombre_pos,tipo,historico", { count: "exact" }).order("codigo_pos")),
     ]);
     if (mx.error) throw mx.error;
     V.max = mx.data[0] ? mx.data[0].fecha_emision : null;
@@ -80,12 +80,20 @@
   }
 
   const okc = (c) => V.canal === "todos" || V.canal === c;
+  const tags = (p) => {
+    const out = [];
+    if (p.t === "comodin") out.push(`<span class="pill w">COMODIN (cobros manuales)</span>`);
+    else out.push(`<span class="pill">${TIPOS[p.t] || p.t}</span>`);
+    if (p.hist) out.push(`<span class="pill mid">histórico</span>`);
+    return out.join(" ");
+  };
 
   function agg(D) {
     const T = D.tickets.filter((t) => okc(t.canal)), L = D.lineas.filter((l) => okc(l.canal));
     const ventas = T.reduce((a, t) => a + t.v, 0), nT = T.filter((t) => !t.nc).length;
     const dev = T.filter((t) => t.nc).reduce((a, t) => a + t.v, 0), nDev = T.filter((t) => t.nc).length;
     const noche = {}, nTn = {}, hora = {}, moz = {}, tipo = {}, prod = {};
+    let comodin = 0;
     T.forEach((t) => {
       noche[t.f] = (noche[t.f] || 0) + t.v;
       if (!t.nc) nTn[t.f] = (nTn[t.f] || 0) + 1;
@@ -93,11 +101,13 @@
       const m = moz[t.mozo] || (moz[t.mozo] = { v: 0, n: 0 }); m.v += t.v; if (!t.nc) m.n++;
     });
     L.forEach((l) => {
-      const tp = (V.codigos[l.c] && V.codigos[l.c].tipo) || "sin_clasificar";
+      const c = V.codigos[l.c] || {};
+      const tp = c.tipo || "sin_clasificar";
       tipo[tp] = (tipo[tp] || 0) + l.v;
-      const p = prod[l.c] || (prod[l.c] = { n: l.n, t: tp, q: 0, v: 0 }); p.q += l.q; p.v += l.v;
+      if (tp === "comodin") comodin += l.v;
+      const p = prod[l.c] || (prod[l.c] = { n: l.n, t: tp, q: 0, v: 0, hist: !!c.historico }); p.q += l.q; p.v += l.v;
     });
-    return { ventas, nT, dev, nDev, noche, nTn, hora, moz, tipo, prod };
+    return { ventas, nT, dev, nDev, comodin, noche, nTn, hora, moz, tipo, prod };
   }
 
   async function render(M) {
@@ -129,7 +139,7 @@
     const tt = tipos.reduce((a, x) => a + Math.max(x[1], 0), 0) || 1;
     // búsqueda: códigos que coinciden con el texto; totales del período cargado
     const pr = {}; D.lineas.forEach((l) => { if (okc(l.canal)) { const p = pr[l.c] || (pr[l.c] = { q: 0, v: 0 }); p.q += l.q; p.v += l.v; } });
-    const res = Object.values(V.codigos).filter((c) => V.q.trim() && norm(c.nombre_pos).includes(norm(V.q))).map((c) => ({ c: c.codigo_pos, n: c.nombre_pos.trim(), t: c.tipo, q: (pr[c.codigo_pos] || {}).q || 0, v: (pr[c.codigo_pos] || {}).v || 0 })).sort((a, b) => b.v - a.v).slice(0, 6);
+    const res = Object.values(V.codigos).filter((c) => V.q.trim() && norm(c.nombre_pos).includes(norm(V.q))).map((c) => ({ c: c.codigo_pos, n: c.nombre_pos.trim(), t: c.tipo, hist: !!c.historico, q: (pr[c.codigo_pos] || {}).q || 0, v: (pr[c.codigo_pos] || {}).v || 0 })).sort((a, b) => b.v - a.v).slice(0, 6);
     const sel = res.find((p) => p.c === V.sel) || res[0];
     let det = "";
     if (sel) {
@@ -137,30 +147,31 @@
       const byD = {}; rows.forEach((r) => { const x = byD[r.f] || (byD[r.f] = { q: 0, v: 0 }); x.q += r.q; x.v += r.v; });
       const q = Object.values(byD).reduce((a, r) => a + r.q, 0), v = Object.values(byD).reduce((a, r) => a + r.v, 0);
       det = `<div class="kpis" style="margin-top:12px"><div class="kpi"><div class="l">Unidades</div><div class="v">${fm(q)}</div><div class="s">${Object.keys(byD).length} noches con venta</div></div><div class="kpi"><div class="l">Ventas</div><div class="v">${mo(v)}</div><div class="s">con IVA, neto de devoluciones</div></div><div class="kpi"><div class="l">Precio promedio</div><div class="v">${q ? mo(v / q) : "—"}</div><div class="s">ventas dividido unidades</div></div></div>
-      <div class="hint">${esc(sel.n)} · ${TIPOS[sel.t] || sel.t} · del ${fd(V.pd)}/${V.pd.slice(0, 4)} al ${fd(V.ph)}/${V.ph.slice(0, 4)}.</div>
+      <div class="hint">${esc(sel.n)} · ${tags(sel)} · del ${fd(V.pd)}/${V.pd.slice(0, 4)} al ${fd(V.ph)}/${V.ph.slice(0, 4)}.</div>
       <div class="scroll" style="max-height:none"><table><thead><tr><th>Noche</th><th>Unidades</th><th>Ventas</th></tr></thead><tbody>${Object.keys(byD).sort().map((d) => `<tr><td class="l">${fd(d)}/${d.slice(0, 4)} <span class="dow">${dow(d)}</span></td><td>${fm(byD[d].q)}</td><td>${mo(byD[d].v)}</td></tr>`).join("") || `<tr><td class="l muted" colspan="3">Sin ventas en esas fechas.</td></tr>`}</tbody></table></div>`;
     }
     const sub = `Datos reales de la caja (Factura Express) · del ${fd(V.desde)}/${V.desde.slice(0, 4)} al ${fd(V.hasta)}/${V.hasta.slice(0, 4)} · hay ventas cargadas del ${fd(V.min)}/${V.min.slice(0, 4)} al ${fd(V.max)}/${V.max.slice(0, 4)} · Solo administración.`;
     const body = `<div class="wrap wide">
  <div class="filters"><div class="dl">Desde <input type="date" id="d1" value="${V.desde}" min="${V.min}" max="${V.max}"></div><div class="dl">Hasta <input type="date" id="d2" value="${V.hasta}" min="${V.min}" max="${V.max}"></div>
  <div class="seg">${[["todos", "Todos"], ["local", "Salón"], ["pedidosya", "PedidosYa"]].map(([k, l]) => `<button data-c="${k}" class="${V.canal === k ? "on" : ""}">${l}</button>`).join("")}</div>
- <span class="muted" style="font-size:12px">No incluye: acuerdo de tarjetas, comodín ni separadores.</span></div>
+ <span class="muted" style="font-size:12px">No incluye: acuerdos comerciales (tarjetas o WEB) ni separadores. El COMODIN (cobros manuales) sí cuenta como venta y se muestra aparte.</span></div>
  <div class="kpis">
   <div class="kpi"><div class="l">Ventas netas</div><div class="v">${mo(A.ventas)}</div><div class="s">con IVA · ya descontadas las devoluciones</div></div>
   <div class="kpi"><div class="l">Tickets</div><div class="v">${fm(A.nT)}</div><div class="s">${fm(A.nT / Math.max(days.length, 1))} por noche en promedio</div></div>
   <div class="kpi"><div class="l">Ticket promedio</div><div class="v">${mo(A.nT ? (A.ventas - A.dev) / A.nT : 0)}</div><div class="s">por comprobante</div></div>
   <div class="kpi ${A.dev < -5000 ? "warn" : ""}"><div class="l">Devoluciones</div><div class="v">${mo(Math.abs(A.dev))}</div><div class="s">${A.nDev} notas de crédito · ${fm(A.ventas ? (Math.abs(A.dev) / (A.ventas - A.dev)) * 100 : 0, 1)}% de lo vendido</div></div>
+  <div class="kpi mid"><div class="l">COMODIN (cobros manuales)</div><div class="v">${mo(A.comodin)}</div><div class="s">incluido en las ventas netas · no es un producto de la carta</div></div>
  </div>
  <div class="card"><div class="cardhead"><div><h3>Ventas por noche</h3><div class="hint">Barras: caja (Factura Express). Línea: cierres de caja. ${all ? "" : "Con un canal filtrado la comparación con cierres no aplica."}</div></div></div><div class="chartbox"><canvas id="cn"></canvas></div></div>
- <div class="card"><h3>Cuadre con los cierres</h3><div class="hint">Noche por noche. Resaltadas las que se apartan 2% o más (${all ? nBad + " noches" : "solo con Todos"}). La diferencia puede ser propina, venta fuera del export u horario.</div>
+ <div class="card"><h3>Cuadre con los cierres</h3><div class="hint">Noche por noche, con el COMODIN incluido (igual que en los cierres). Resaltadas las que se apartan 2% o más (${all ? nBad + " noches" : "solo con Todos"}). La diferencia puede ser propina, venta fuera del export u horario.</div>
  <div class="scroll"><table><thead><tr><th>Noche</th><th>Ventas caja</th><th>Cierres</th><th>Diferencia</th><th>%</th><th>Tickets</th></tr></thead><tbody>${tabla}</tbody></table></div></div>
  <div class="two"><div class="card"><h3>Ventas por hora</h3><div class="hint">Hora de cierre del ticket; noche de 18 a 03 h.</div><div class="chartbox sm"><canvas id="ch"></canvas></div></div>
  <div class="card"><h3>Ventas por tipo</h3><div class="hint">Lo que no está unido a la carta igual cuenta por tipo.</div><table><tbody>${tipos.map(([k, v]) => `<tr><td class="l">${TIPOS[k] || k}</td><td>${mo(v)}</td><td style="width:40%"><span class="barline" style="width:${(Math.max(v, 0) / tt) * 140}%"></span> <span class="muted">${fm((v / tt) * 100, 1)}%</span></td></tr>`).join("")}</tbody></table></div></div>
- <div class="two"><div class="card"><h3>Productos más vendidos</h3><div class="hint">Por plata, sin vasos ni invitaciones.</div><table><thead><tr><th>Producto</th><th>Unid.</th><th>Ventas</th></tr></thead><tbody>${top.map((p) => `<tr><td class="l"><span class="prod">${esc(p.n)}</span> <span class="pill">${TIPOS[p.t] || p.t}</span><br><span class="barline" style="width:${(p.v / mx) * 100}%;height:5px"></span></td><td>${fm(p.q)}</td><td>${mo(p.v)}</td></tr>`).join("")}</tbody></table></div>
+ <div class="two"><div class="card"><h3>Productos más vendidos</h3><div class="hint">Por plata, sin vasos ni invitaciones.</div><table><thead><tr><th>Producto</th><th>Unid.</th><th>Ventas</th></tr></thead><tbody>${top.map((p) => `<tr><td class="l"><span class="prod">${esc(p.n)}</span> ${tags(p)}<br><span class="barline" style="width:${(p.v / mx) * 100}%;height:5px"></span></td><td>${fm(p.q)}</td><td>${mo(p.v)}</td></tr>`).join("")}</tbody></table></div>
  <div class="card"><h3>Ventas por mozo</h3><div class="hint">Del ticket (delivery no tiene mozo).</div><table><thead><tr><th>Mozo</th><th>Tickets</th><th>Ventas</th><th>Ticket prom.</th></tr></thead><tbody>${moz.map(([k, m]) => `<tr><td class="l"><span class="prod">${esc(k)}</span><br><span class="barline" style="width:${(m.v / mozMx) * 100}%;height:5px"></span></td><td>${m.n}</td><td>${mo(m.v)}</td><td>${mo(m.n ? m.v / m.n : 0)}</td></tr>`).join("")}</tbody></table></div></div>
  <div class="card" id="busq"><h3>Ventas por producto</h3><div class="hint">Buscá un producto y mirá cuánto se vendió entre dos fechas, como en el historial de compras.</div>
  <div class="barf"><input type="search" id="q" value="${esc(V.q)}" placeholder="Buscar producto…" style="flex:1;min-width:200px"><div class="dl">Desde <input type="date" id="p1" value="${V.pd}" min="${V.min}" max="${V.max}"></div><div class="dl">Hasta <input type="date" id="p2" value="${V.ph}" min="${V.min}" max="${V.max}"></div></div>
- <ul class="res">${res.map((p) => `<li class="${sel && p.c === sel.c ? "on" : ""}" data-p="${esc(p.c)}"><span><b>${esc(p.n)}</b> <span class="pill">${TIPOS[p.t] || p.t}</span></span><span class="muted">${fm(p.q)} unid. en el período de arriba · ${mo(p.v)}</span></li>`).join("") || '<li class="muted">Sin resultados</li>'}</ul>${det}</div>
+ <ul class="res">${res.map((p) => `<li class="${sel && p.c === sel.c ? "on" : ""}" data-p="${esc(p.c)}"><span><b>${esc(p.n)}</b> ${tags(p)}</span><span class="muted">${fm(p.q)} unid. en el período de arriba · ${mo(p.v)}</span></li>`).join("") || '<li class="muted">Sin resultados</li>'}</ul>${det}</div>
  <div class="foot">Fuente: ventas de la caja (tickets, líneas y códigos) y cierres. El dashboard anterior sigue funcionando en paralelo.</div></div>`;
     M.app.innerHTML = M.shell("Ventas", sub, body);
     M.bindSalir();

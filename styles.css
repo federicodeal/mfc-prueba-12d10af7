@@ -21,6 +21,7 @@ header.top{padding:16px 24px 10px;border-bottom:1px solid var(--line);position:s
 .kpi .v{font-size:22px;font-weight:700;margin-top:4px}
 .kpi .s{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.4}
 .kpi.warn{border-color:var(--warnb);background:var(--warn)}
+.kpi.mid{border-color:var(--midb);background:var(--mid)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:14px}
 .card h3{margin:0 0 4px;font-size:15px}
 .hint{font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5}
